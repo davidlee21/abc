@@ -1,0 +1,655 @@
+# 爬取数据的爬虫
+# 计划:
+# 1.获取需爬取的所有URL,储存对应URL
+# 2.解析请求对应URL所获得的数据
+# 3,将解析内容存入MYSQL数据库
+
+# 注意：预防异常机制的补充
+
+# 性能优化：
+# 通过打印执行时间发现，CPU计算并不花时间，主要的时间都花在网络请求上，也就是I/O上，请求时间基本是计算时间的10倍
+# 所以使用多线程或协程进行优化有意义，但是在哪启用多线程呢，怎么布置操作流程较好
+# 注意，多线程或协程共享同一内存地址的数据，这可以使得代码简化，但同时，也要注意同一变量被反复调用，导致数据错乱的问题
+
+# 第六版在第三版的基础上加上多进程
+
+# 1获取URL
+import requests
+import pandas as pd
+# import bs4
+from scrapy import Selector
+import re
+import time
+import json
+import ast
+from py2neo import Graph, Node, Relationship,NodeMatcher
+from peewee import *
+from datetime import date
+import datetime
+from selenium import webdriver
+import pymysql
+import numpy as np
+import random
+import multiprocessing as mlp
+import asyncio
+from asyncio import sleep
+db = MySQLDatabase('experiment_database', host='127.0.0.1', port=3306, user='root', password='password')
+
+
+# 调用外部类的实例的方法
+# 一个表要定义一个类？
+# 存论坛子版块的表
+class BKUrl(Model):
+    # 定义类属性
+    # 定义局部实例
+    # 注意：主键或索引的设置
+    # url用文本类型储存？
+    burl = TextField()
+
+    class Meta:
+        database = db  # This model uses the "my_scrapy" database.
+
+
+# 存第一批用户主页url的表
+class UserUrl(Model):
+    user_id = CharField(max_length=60, index=True,primary_key=True)
+    user_url = TextField()
+    batch = IntegerField()
+    iden = CharField(max_length=8)
+
+    class Meta:
+        database = db  # This model uses the "my_scrapy" database.
+        table_name = 'UserUrl'
+
+
+# 存用户粉丝及关注详情的表
+class Batch1User(Model):
+    user_id = CharField(max_length=60, index=True, primary_key=True)
+    FansList = TextField()
+    FollowList = TextField()
+    BatchNo = IntegerField()
+
+    class Meta:
+        database = db  # This model uses the "my_scrapy" database.
+        table_name = 'Batch1User'
+
+
+class Batch2User(Model):
+    user_id = CharField(max_length=60, index=True)
+    FansList = TextField()
+    FollowList = TextField()
+    AsFanOf = CharField(max_length=60,null=True)
+    AsFollowOf = CharField(max_length=60,null=True)
+    Duplicated = IntegerField()
+    BatchNo = IntegerField()
+
+    class Meta:
+        database = db  # This model uses the "my_scrapy" database.
+        table_name = 'Batch2User'
+
+
+class Batch3User(Model):
+    user_id = CharField(max_length=60, index=True)
+    FansList = TextField()
+    FollowList = TextField()
+    AsFanOf = CharField(max_length=60,null=True)
+    AsFollowOf = CharField(max_length=60,null=True)
+    Duplicated = IntegerField()
+    BatchNo = IntegerField()
+
+    class Meta:
+        database = db  # This model uses the "my_scrapy" database.
+        table_name = 'Batch3User'
+
+class Batch4User(Model):
+    user_id = CharField(max_length=60, index=True)
+    FansList = TextField()
+    FollowList = TextField()
+    AsFanOf = CharField(max_length=60,null=True)
+    AsFollowOf = CharField(max_length=60,null=True)
+    Duplicated = IntegerField()
+    BatchNo = IntegerField()
+
+    class Meta:
+        database = db  # This model uses the "my_scrapy" database.
+        table_name = 'Batch4User'
+
+
+class temp_data(Model):
+    user_id = CharField(max_length=60)
+    FansList = TextField()
+    FollowList = TextField()
+    AsFanOf = CharField(max_length=60,null=True)
+    AsFollowOf = CharField(max_length=60,null=True)
+    Duplicated = IntegerField()
+    BatchNo = IntegerField(index=True)
+
+    class Meta:
+        database = db  # This model uses the "my_scrapy" database.
+        table_name = 'temp_data'
+
+
+class SocialSpider(object):
+    def __init__(self,table,temp_data):
+        # 实例属性
+        # 还是加个访问限制吧
+        # 查询表
+        self.__query_table = table
+        # 储存表
+        self.__table = table
+        # 在环境变量中指定驱动器路径，或在函数表达式中显式说明
+        # 打开浏览器，driver变量指代内存中的浏览器程序
+        self.driver_path=r"C:\ChromeDriver\ChromeDriver.exe"
+        # self.driver = webdriver.Chrome(executable_path=r"C:\ChromeDriver\ChromeDriver.exe")
+        self.temp_data=temp_data
+
+    # 返回当前查询表的表名
+    def get_query_name(self):
+        return self.__query_table
+
+    # 设置当前查询表的表名
+    def set_query_name(self,table_class):
+        self.__query_table = table_class
+
+    # 返回当前储存表的表名
+    def get_table_name(self):
+        return self.__table
+
+    # 可以在这里加上进行修改的限制
+    def set_table_name(self,table_class):
+        self.__table = table_class
+
+    # 将数据存入数据库(给定一个数据集，将数据集中的逐条数据，一一插入类现在对应的储存表中)
+    # 存储数据时，要记录批次，以方便记录历史，及进行去重处理
+    def mysql_restore(self,data_set):
+        data_set.reset_index(drop=True,inplace=True)
+        for index in range(len(data_set)):
+            data=data_set.loc[index]
+            self.__table.insert(user_id=data['user_id'],FansList=data['FansList'],FollowList=data['FollowList'],
+                                AsFanOf=data['AsFanOf'], AsFollowOf=data['AsFollowOf'], Duplicated=data['Duplicated']
+                                , BatchNo=data['BatchNo']).execute()
+
+    # 临时数据存储
+    def mysql_temp_data(self,data_set):
+        data_set.reset_index(drop=True,inplace=True)
+        for index in range(len(data_set)):
+            data=data_set.loc[index]
+            self.temp_data.insert(user_id=data['user_id'],FansList=data['FansList'],FollowList=data['FollowList'],
+                                AsFanOf=data['AsFanOf'], AsFollowOf=data['AsFollowOf'], Duplicated=data['Duplicated']
+                                , BatchNo=data['BatchNo']).execute()
+
+    # 开始写场景下的逻辑：
+
+    # 获取论坛子版块的URL
+    # 网页都是向url请求文件，然后运用文件在当前页面加载内容，区别只在于请求的文件是什么而已
+    # 三大请求方式：xhr（异步ajax）,js,css（本地渲染）
+    # 根据文件名，猜文件内容，来找目标内容对应文件（或可以批量请求URL来去找？自动化？）
+    # js动态加载的，找对应的js文件的请求URL，从该url中获取对应js，然后取得js中的数据
+    # 注意，子版块至少在二级，但也可能在三级、四级。。
+    def get_url(self):
+        # 获取存储论坛子版块的URL的js文件
+        url = "https://bbs.csdn.net/dynamic_js/left_menu.js?csdn"
+        response = requests.get(url=url)
+        # 正则表达式匹配截取内容
+        # 匹配一个中括号内的内容："\[.*?\]"
+        # pattern=re.compile("[\[]+[^\]]+[\]]?")
+        # re.search()匹配到行末为止，碰上回车换行符就停止匹配
+        doc0 = re.search("forumNodes: (.*])",response.text)
+        # dump转换文件，dumps转换数据类型,load与loads的关系类似
+        if doc0:
+            # group(0)是正则表达式匹配的整体结果，其他分组是按()分组匹配得到的结果,()可用于对匹配结果分组
+            doc1=doc0.group(1).replace("null","None")
+            # ast.literal_eval将数据按语法结构，转换为list数据类型
+            self.walkover( ast.literal_eval(doc1))
+            print("OK")
+        return
+
+    # 遍历节点树,并储存url
+    def walkover(self,tree):
+        for node in tree:
+            # 若存在子节点，则该节点是中间节点，遍历它的子节点
+            if 'children' in node and node["children"]:
+                # 递归调用，注意栈的限制？
+                self.walkover(node["children"])
+            else:
+                # 储存每一个子板块的URL：
+                record = self.__table(burl='https://bbs.csdn.net/' + node['url'])
+                record.save()
+
+    # 2.解析数据
+    # 获取第一层用户ID：每个模块取几个人
+    # 从每一个二级版块url中，提取用户ID
+    def get_first_batch(self):
+        # 读取URL
+        # 只取前30个子版块的内容来爬
+        data=pd.DataFrame(self.__query_table.select().limit(30).dicts())
+        d = list(range(30))
+        random.shuffle(d)
+        driver=webdriver.Chrome(executable_path=self.driver_path)
+        # 提取用户ID（提取未解决问题的提出用户ID）
+        # 选择未解决问题这一讨论区，主要是这里的用户更具随机性
+        # 且这一讨论区，是储存的Url的直接请求结果，省事，成本低
+        # 每次选3个最后发表人，3个作者
+        # id有了，就往数据库里写，并同时写入载入批次
+        # 后面可加上随机选择：加数字索引，然后生成随机整数，选择整数对应的用户
+        # 储存插入数据库的所有ID
+        store_record=[]
+        for record in d:
+            # get方法会一直等到页面被完全加载，然后才会继续程序
+            # driver.get(url=record.burl)
+            driver.get(url=data.loc[record,'burl'])
+
+            # 但是CSDN现在的反爬策略是：返回一个JS文件，本地加载COOKIE，然后再重新加载该页面，这个过程是在第一次页面加载完成之后的
+            # 所以需要等一下，等这个重加载过程加载完成，再来去要HTML
+            time.sleep(2)
+            html=driver.page_source
+            # print(html)
+            sel = Selector(text=html)
+            # extract出来的是List数据类型还是什么数据类型？确认一下
+            # 确认了，是List
+            # 尽量不要在这里选用户，不方便对用户进行条件筛选
+            author_list = sel.xpath(
+                "//div[@class='forums_table_c']/table/tbody//td[@class='forums_author']/a/@href").extract()[3:]
+            last_publisher_list = sel.xpath(
+                "//div[@class='forums_table_c']/table/tbody//td[@class='forums_last_pub']/a/@href").extract()
+
+            count = 0
+            for author_url in author_list:
+                author_id=re.split('//my.csdn.net/',author_url)[1]
+                # 避免重复
+                if author_id in store_record:
+                    continue
+                # 内部实例化，无法调用对应方法？
+                # 使用实例化后，save()的方法，无法插入数据
+                # 但是另外的CREATE和INSERT方式，都可以插入
+                # self.__table.insert(user_id=author_id,user_url='https://me.csdn.net/'+author_id,
+                #                            batch=1,iden='author').execute()
+
+                # 带粉丝及关注列表的爬取
+                fans_data=self.gain_fans(author_id)
+                following_data = self.gain_following(author_id)
+
+                self.__table.insert(user_id=fans_data['user_id'], FansList=fans_data['FansList'], FollowList=following_data['FollowList'],
+                                   BatchNo=1).execute()
+
+                store_record.append(author_id)
+                count+=1
+                if count>=3:
+                    break
+            count = 0
+            for last_publisher_url in last_publisher_list:
+                last_publisher_id = re.split('//my.csdn.net/', last_publisher_url)[1]
+                # 避免重复
+                if last_publisher_id in store_record:
+                    continue
+                # self.__table.insert(user_id=last_publisher_id,user_url=
+                #                             'https://me.csdn.net/'+last_publisher_id,batch=1,iden='pub').execute()
+
+                # 带粉丝及关注列表的爬取
+                fans_data = self.gain_fans(last_publisher_id)
+                following_data = self.gain_following(last_publisher_id)
+
+                self.__table.insert(user_id=fans_data['user_id'], FansList=fans_data['FansList'],
+                                    FollowList=following_data['FollowList'],
+                                    BatchNo=1).execute()
+
+                store_record.append(last_publisher_id)
+                count+=1
+                if count>=3:
+                    break
+
+    # 获取用户粉丝及关注对象
+    # 递归调用该函数三次，即可得到结果
+    # 该函数接收一个ID，来请求数据
+    # 解析获取的HTML，获得对应数据
+    # 储存爬取批次
+    # 应该调用一次，爬取一批，这样好控制
+    def gain_fans(self,user):
+        # 请求页面URL结构：
+        # 粉丝： https://me.csdn.net/fans/用户名称
+        # 关注：https: // me.csdn.net / follow / 用户名称
+        # 1.粉丝列表
+        # 加一个时间限制，免得爬虫卡住
+        # 元组(3,3)的第一个值，表示connect连接的超时时间，第二个值表示read读取的超时时间
+        print("***", user)
+        try:
+            html = requests.get(url='https://me.csdn.net/fans/'+user,timeout=(3,3)).text
+            sel = Selector(text=html)
+            # # 粉丝数
+            # fans_number=re.search(r"\d+",sel.xpath("//div[@class='fans']/a/span/text()").extract()[0]).group(0)
+            # 粉丝详情
+            fan_ids = list(pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/@href").extract()).replace(
+                "https://me.csdn.net/", "", regex=True))
+            # # 用户名的去掉头尾的空格这一操作，可用SQL在数据库中实现，也可用python的pandas加上正则表达式实现
+            # fan_name = pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/text()")
+            #                       .extract()).replace("\s", "", regex=True)
+            result=dict(zip(('user_id','FansList'),
+                          (user,fan_ids)))
+            return result
+        except:
+            return dict(zip(('user_id', 'FansList'),(user, [])))
+
+    def gain_following(self,user):
+        print("!!!",user)
+        try:
+            # 请求页面URL结构：
+            # 粉丝： https://me.csdn.net/fans/用户名称
+            # 关注：https: // me.csdn.net / follow / 用户名称
+            # 2.关注列表
+            # 加一个时间限制，免得爬虫卡住
+            # 元组(3,3)的第一个值，表示connect连接的超时时间，第二个值表示read读取的超时时间
+            html = requests.get(url='https://me.csdn.net/follow/'+user,timeout=(3,3)).text
+            sel = Selector(text=html)
+            # # 关注数
+            # following_number=re.search(r"\d+",sel.xpath("//div[@class='att']/a/span/text()").extract()[0]).group(0)
+            # 关注详情
+            following_ids = list(pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/@href").extract()).replace(
+                "https://me.csdn.net/", "", regex=True))
+            # # 用户名的去掉头尾的空格这一操作，可用SQL在数据库中实现，也可用python的pandas加上正则表达式实现
+            # following_name = pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/text()")
+            #                       .extract()).replace(r"\s", "", regex=True)
+            result=dict(zip(('user_id','FollowList'),
+                          (user,following_ids)))
+            return result
+        except:
+            return dict(zip(('user_id', 'FollowList'),
+                                      (user, [])))
+
+    # 从数据库中获取爬取用户列表（同一批的）
+    # 数据库数据去重(存了之后去，还是存进去之后，在数据库里去重，还是提出来的时候去重)
+    # 由于现在获取的是爬取列表，所以需要去重
+    # 由于我们关注闭环关系，所以应该在提出来的时候去重，因为我们是需要保存重复的情况的，只是在再次请求数据时，已有的，不再请求了而已
+    # 或许可以专门建一张表，用来储存爬取ID，这张表是用户表去重后的结果
+    def gain_user_list(self,table_name):
+        # str.fromat()的替代用法：f'{variable}'
+        con=pymysql.connect(database='experiment_database',host='127.0.0.1',port=3306,user='root',password='password')
+        sql1=f'''select user_id,FansList,FollowList
+                        from {table_name}
+                        where duplicated='0' '''
+        # 查出的是DF
+        user_list=pd.read_sql(sql1,con)
+        user_list['FansList'] = user_list['FansList'].apply(ast.literal_eval)
+        user_list['FollowList'] = user_list['FollowList'].apply(ast.literal_eval)
+        return user_list
+
+    def store_result_table(self,batch_count):
+        con = pymysql.connect(database='experiment_database', host='127.0.0.1', port=3306, user='root', password='password')
+        sql1 = f'''select * from temp_data where batchno={batch_count} '''
+        # 查出的是DF
+        df = pd.read_sql(sql1, con)
+        df['FansList'] = df['FansList'].apply(ast.literal_eval)
+        df['FollowList'] = df['FollowList'].apply(ast.literal_eval)
+        # 同一批次数据内部的重复数据标记
+        # 重复数据中的第一条数据，不打标记
+        df['Duplicated'] = np.where(df['user_id'].duplicated(), 1, 0)
+        # 与之前的批次做对比，重复数据打上标记
+        # 这个要不然还是把DF拆开了，分别与之前的批次做对比，然后分别插入，一次太多条做对比估计内存顶不住
+        for df_index in range(0,len(df),10000):
+            df_son=df.loc[df_index:df_index+9999]
+            for i in range(1, batch_count):
+                table_name = 'Batch' + str(i) + 'User'
+                # 这个函数已带去重
+                user_list = self.gain_user_list(table_name)
+                user_list['flag'] = 1
+                df_son = pd.merge(df_son, user_list[['user_id', 'flag']], on='user_id', how='left')
+                # 未打上标记的，才与之前的做对比
+                df_son['Duplicated'] = np.where((df_son['flag'] == 1) & (df_son['Duplicated'] == 0), 1, df_son['Duplicated'])
+                df_son = df_son.drop('flag', axis=1)
+            # 插入表中
+            self.mysql_restore(df_son)
+
+    def clear_temp_data(self):
+        return
+
+    # 循环调用爬取函数,一次爬取一批用户
+    # 输入批次信息，然后对应着入库
+    # 传入表名table_name，然后去该表中查用户来爬取
+    # 加入异常处理机制，单次数据获取失败，爬虫仍然继续运行，免得程序老是中断
+    def main(self,batch_count,user_list,df):
+        print('任务开始：',datetime.datetime.now())
+        if batch_count<2:
+            return
+
+        for user_count in range(len(user_list)):
+            source=user_list.loc[user_count]
+            for user in source['FansList']:
+                print('开始获取单个用户的粉丝：', datetime.datetime.now())
+                try:
+                    fans_data=self.gain_fans(user)
+                except:
+                    fans_data=dict(zip(('user_id','FansList'),
+                      (user,[])))
+                print('获取结束：', datetime.datetime.now())
+                print('开始获取单个用户的关注对象：', datetime.datetime.now())
+                try:
+                    following_data = self.gain_following(user)
+                except:
+                    following_data=dict(zip(('user_id','FollowList'),
+                      (user,[])))
+                print('获取结束：', datetime.datetime.now())
+                df = df.append(dict(
+                            zip(['user_id','FansList','FollowList','AsFanOf','AsFollowOf','Duplicated','BatchNo'],
+                                   [fans_data['user_id'],fans_data['FansList'],following_data['FollowList'],
+                                    source['user_id'],'',0,batch_count])
+                            ),ignore_index=True)
+            for user in source['FollowList']:
+                print('开始获取单个用户的粉丝：', datetime.datetime.now())
+                try:
+                    fans_data =self.gain_fans(user)
+                except:
+                    fans_data = dict(zip(('user_id', 'FansList'),
+                                         (user, [])))
+                print('获取结束：', datetime.datetime.now())
+                print('开始获取单个用户的关注对象：', datetime.datetime.now())
+                try:
+                    following_data =self.gain_following(user)
+                except:
+                    following_data = dict(zip(('user_id', 'FollowList'),
+                                              (user, [])))
+                print('获取结束：', datetime.datetime.now())
+                df = df.append(dict(
+                        zip(['user_id', 'FansList', 'FollowList', 'AsFanOf', 'AsFollowOf', 'Duplicated', 'BatchNo'],
+                        [fans_data['user_id'], fans_data['FansList'], following_data['FollowList'],
+                         '',source['user_id'],0, batch_count])
+                        ), ignore_index=True)
+            # 每二十个人停一下
+            if (user_count%20==0)&(user_count>=20):
+                time.sleep(1)
+                print(user_count)
+                print(datetime.datetime.now())
+                # 插入表中
+                # 中间存储，这样更健壮，更稳定一些，不容易受破坏和影响
+                print('插入20条数据：', datetime.datetime.now())
+                self.mysql_temp_data(df)
+                print('插入结束：', datetime.datetime.now())
+                df = pd.DataFrame(
+                    columns=['user_id', 'FansList', 'FollowList', 'AsFanOf', 'AsFollowOf', 'Duplicated', 'BatchNo'])
+        print('获取所有爬取结果，并处理及插入：', datetime.datetime.now())
+        self.store_result_table(batch_count)
+        print('结束：', datetime.datetime.now())
+
+    async def get_target_info(self,batch_count,df,user,user_id,relation_flag='fan'):
+        # 异步操作事件序列中的主函数
+        loop = asyncio.get_event_loop()
+        future1 = loop.run_in_executor(None, self.gain_fans, user)
+        fans_data=await future1
+        future2 = loop.run_in_executor(None,  self.gain_following, user)
+        following_data=await future2
+        if relation_flag=='fan':
+            df.append([fans_data['user_id'], fans_data['FansList'], following_data['FollowList'],user_id, '',
+                   0, batch_count])
+        elif relation_flag=='following':
+            df.append([fans_data['user_id'], fans_data['FansList'], following_data['FollowList'], '',user_id,
+                   0, batch_count])
+        return 1
+
+        # print('爬取子用户的粉丝', datetime.datetime.now())
+        # fans_data =await self.gain_fans(user)
+        # print('爬取子用户的关注', datetime.datetime.now())
+        # following_data =await self.gain_following(user)
+        # print('爬取子用户完毕', datetime.datetime.now())
+        # df.append([fans_data['user_id'], fans_data['FansList'], following_data['FollowList'],user_id, '',
+        #            0, batch_count])
+
+
+    def corou_main(self,batch_count,user_list):
+        # 异步实现方式：在多个主函数之间，实现并行运行，主函数内部，设置，在执行特定函数时，切换到另一个主函数来去运行，
+        # 等待特定函数执行完后，再返回执行原主函数剩下的内容
+        # 在同一个循环里异步请求，创建多个变量，以避免变量共享导致的错误
+        # 也可以通过创建函数，利用不可变对象或局部变量的特性，将一个变量的值固定在一个主函数之内
+        print('任务开始：',datetime.datetime.now())
+        # 获取EventLoop:
+        if batch_count<2:
+            return
+        loop = asyncio.get_event_loop()
+        df=[]
+        for user_count in range(0,len(user_list),12):
+            source_list=[]
+            if user_count+12>=len(user_list):
+                for i in range(user_count,len(user_list)):
+                    source_list.append(user_list.loc[i])
+            else:
+                for i in range(12):
+                    source_list.append(user_list.loc[user_count+i])
+            print(user_count,datetime.datetime.now())
+            # 由于CSDN限制了粉丝及关注列表显示长度为20，所以最多也就是开20个任务
+            # 粉丝加关注合起来是40个，所以最多也就是开40个协程，因此不用检验长度，直接按照变量长度开协程
+            # 所以现在是同一用户的粉丝列表与关注列表中的各个用户的相关信息，同步获取
+            tasks=[]
+            for source in source_list:
+                fan_len=len(source['FansList'])#粉丝列表
+                follow_len = len(source['FollowList'])#关注列表
+                if fan_len>0:
+                    tasks.extend([self.get_target_info(batch_count,df,source['FansList'][user_index],source['user_id'],'fan') for user_index in range(fan_len)])
+                    if follow_len>0:
+                        # list之间连接用extend
+                        # list本身在末尾添加元素用append
+                        tasks.extend([self.get_target_info(batch_count,df,source['FollowList'][user_index],source['user_id'],'following') for user_index in range(follow_len)])
+                elif follow_len>0:
+                    tasks.extend([self.get_target_info(batch_count, df, source['FollowList'][user_index], source['user_id'],'following') for user_index in range(follow_len)])
+                else:
+                    continue
+            if len(tasks)!=0:
+                futures = asyncio.wait(tasks)
+                loop.run_until_complete(futures)
+            else:
+                continue
+            print(user_count,'爬取完毕', datetime.datetime.now())
+            time.sleep(1)
+            print(datetime.datetime.now())
+            # 插入表中
+            # 中间存储，这样更健壮，更稳定一些，不容易受破坏和影响
+            print('插入12个用户的爬取结果：', datetime.datetime.now())
+            data = pd.DataFrame(df, columns=['user_id', 'FansList', 'FollowList', 'AsFanOf', 'AsFollowOf', 'Duplicated', 'BatchNo'])
+            self.mysql_temp_data(data)
+            print('插入结束：', datetime.datetime.now())
+            df = []
+        loop.close()
+
+
+class Neo4jStore(object):
+    def __init__(self):
+        # 连接本地图形数据库
+        self.graph = Graph("http://localhost:7474", username="neo4j", password='NEOFORJ')
+        self.mysql_connector=pymysql.connect(database='my_scrapy',host='127.0.0.1',port=3306,user='root',password='password')
+
+    # 从本地数据库或数据文件或其他数据来源，获取数据
+    def fetch_data_dependence(self,table_name,duplicated=False):
+        if duplicated:
+            var = '1'
+        else:
+            var = '0'
+        sql=f'''select * from {table_name} where duplicated={var} '''
+        df = pd.read_sql(sql,self.mysql_connector)
+        return df
+
+    def fetch_data(self,table_name):
+        sql=f'''select * from {table_name}'''
+        df = pd.read_sql(sql,self.mysql_connector)
+        return df
+
+    def store_node_only(self,table_name):
+        tx = self.graph.begin()
+        data = self.fetch_data(table_name)
+        data['BatchNo']=data['BatchNo'].astype(str)
+        for i in range(len(data)):
+            user_id = data.loc[i, 'user_id']
+            BatchNo = data.loc[i, 'BatchNo']
+            b = Node("User", user_id=user_id,
+                     BatchNo=BatchNo)
+            tx.create(b)
+        tx.commit()
+
+    # 遍历获取的数据，创建事务，并插入数据
+    def store_node_rel_nd(self,table_name):
+        tx=self.graph.begin()
+        data=self.fetch_data_dependence(table_name)
+        data['BatchNo'] = data['BatchNo'].astype(str)
+        BatchNo = data.loc[0, 'BatchNo']
+        asfollowof=data[data['AsFollowOf'] != ''].reset_index(drop=True)
+        asfanof = data[data['AsFanOf'] != ''].reset_index(drop=True)
+        matcher = NodeMatcher(self.graph)
+
+        for i in range(len(asfollowof)):
+            follower = matcher.match('User', user_id=asfollowof.loc[i,'AsFollowOf']).first()
+            befollow=Node('User',user_id=asfollowof.loc[i,'user_id'],BatchNo=BatchNo)
+            ab = Relationship(follower, "follows", befollow)
+            tx.create(befollow)
+            tx.create(ab)
+
+        for i in range(len(asfanof)):
+            befollow = matcher.match('User', user_id=asfanof.loc[i,'AsFanOf']).first()
+            follower=Node('User',user_id=asfanof.loc[i,'user_id'],BatchNo=BatchNo)
+            ab = Relationship(follower, "follows", befollow)
+            tx.create(follower)
+            tx.create(ab)
+        # 提交事务
+        tx.commit()
+
+    def store_node_rel_d(self, table_name):
+        tx = self.graph.begin()
+        data = self.fetch_data_dependence(table_name,duplicated=True)
+        data['BatchNo'] = data['BatchNo'].astype(str)
+        asfollowof = data[data['AsFollowOf'] != ''].reset_index(drop=True)
+        asfanof = data[data['AsFanOf'] != ''].reset_index(drop=True)
+        matcher = NodeMatcher(self.graph)
+
+        for i in range(len(asfollowof)):
+            follower = matcher.match('User', user_id=asfollowof.loc[i, 'AsFollowOf']).first()
+            befollow = matcher.match('User', user_id=asfollowof.loc[i, 'user_id']).first()
+            ab = Relationship(follower, "follows", befollow)
+            tx.create(ab)
+
+        for i in range(len(asfanof)):
+            befollow = matcher.match('User', user_id=asfanof.loc[i, 'AsFanOf']).first()
+            follower = matcher.match('User', user_id=asfanof.loc[i, 'user_id']).first()
+            ab = Relationship(follower, "follows", befollow)
+            tx.create(ab)
+        # 提交事务
+        tx.commit()
+
+    def create_index(self):
+        self.graph.schema.create_index('User', 'user_id')
+
+
+if __name__ == "__main__":
+    db.create_tables([Batch2User,temp_data])
+
+    spider=SocialSpider(BKUrl,temp_data)
+    spider.set_table_name(Batch2User)
+
+    # 开始爬取
+    pool=mlp.Pool(processes=2)
+    user_list = spider.gain_user_list('Batch'+str(2-1)+'User')
+    # 除法取整
+    end=len(user_list)
+    mid=end//2
+    for i,j in zip([0,mid+1],[mid,end-1]):
+        # 维持执行的进程总数为processes，当一个进程执行完毕后会添加新的进程进去
+        pool.apply_async(spider.corou_main, args=(2,user_list.loc[i:j]))
+    pool.close()
+    #调用join之前，先调用close函数，否则会出错。执行完close后不会有新的进程加入到pool,join函数等待所有子进程结束
+    pool.join()
+    print('获取所有爬取结果，并处理及插入：', datetime.datetime.now())
+    spider.store_result_table(2)
+    print('结束：', datetime.datetime.now())
