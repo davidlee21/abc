@@ -11,7 +11,8 @@
 # 所以使用多线程或协程进行优化有意义，但是在哪启用多线程呢，怎么布置操作流程较好
 # 注意，多线程或协程共享同一内存地址的数据，这可以使得代码简化，但同时，也要注意同一变量被反复调用，导致数据错乱的问题
 
-# 第六版在第三版的基础上加上多进程
+# 第4b版在第三版的基础上加上多进程
+# 第5b版在第4b版的基础上加上异步请求aiohttp
 
 # 1获取URL
 import requests
@@ -33,7 +34,9 @@ import random
 import multiprocessing as mlp
 import asyncio
 from asyncio import sleep
-db = MySQLDatabase('experiment_database', host='127.0.0.1', port=3306, user='root', password='password')
+import aiohttp
+
+db = MySQLDatabase('my_scrapy', host='127.0.0.1', port=3306, user='root', password='password')
 
 
 # 调用外部类的实例的方法
@@ -304,56 +307,61 @@ class SocialSpider(object):
     # 解析获取的HTML，获得对应数据
     # 储存爬取批次
     # 应该调用一次，爬取一批，这样好控制
-    def gain_fans(self,user):
+    async def gain_fans(self,user,session):
         # 请求页面URL结构：
         # 粉丝： https://me.csdn.net/fans/用户名称
         # 关注：https: // me.csdn.net / follow / 用户名称
         # 1.粉丝列表
         # 加一个时间限制，免得爬虫卡住
         # 元组(3,3)的第一个值，表示connect连接的超时时间，第二个值表示read读取的超时时间
-        print("***", user)
+        # 异步请求
+        # 现在换成异步请求后，timeout参数只接收一个整数
         try:
-            html = requests.get(url='https://me.csdn.net/fans/'+user,timeout=(3,3)).text
-            sel = Selector(text=html)
-            # # 粉丝数
-            # fans_number=re.search(r"\d+",sel.xpath("//div[@class='fans']/a/span/text()").extract()[0]).group(0)
-            # 粉丝详情
-            fan_ids = list(pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/@href").extract()).replace(
-                "https://me.csdn.net/", "", regex=True))
-            # # 用户名的去掉头尾的空格这一操作，可用SQL在数据库中实现，也可用python的pandas加上正则表达式实现
-            # fan_name = pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/text()")
-            #                       .extract()).replace("\s", "", regex=True)
-            result=dict(zip(('user_id','FansList'),
-                          (user,fan_ids)))
-            return result
+            async with session.get(url='https://me.csdn.net/fans/'+user, timeout=4) as resp:
+                html = await resp.text()
+                sel = Selector(text=html)
+                # # 粉丝数
+                # fans_number=re.search(r"\d+",sel.xpath("//div[@class='fans']/a/span/text()").extract()[0]).group(0)
+                # 粉丝详情
+                fan_ids = list(pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/@href").extract()).replace(
+                    "https://me.csdn.net/", "", regex=True))
+                # # 用户名的去掉头尾的空格这一操作，可用SQL在数据库中实现，也可用python的pandas加上正则表达式实现
+                # fan_name = pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/text()")
+                #                       .extract()).replace("\s", "", regex=True)
+                result = dict(zip(('user_id', 'FansList'),
+                                  (user, fan_ids)))
+                return result
         except:
             return dict(zip(('user_id', 'FansList'),(user, [])))
 
-    def gain_following(self,user):
-        print("!!!",user)
+    async def gain_following(self,user,session):
+        # 请求页面URL结构：
+        # 粉丝： https://me.csdn.net/fans/用户名称
+        # 关注：https: // me.csdn.net / follow / 用户名称
+        # 2.关注列表
+        # 加一个时间限制，免得爬虫卡住
+        # 元组(3,3)的第一个值，表示connect连接的超时时间，第二个值表示read读取的超时时间
+        # 异步请求
+        # 现在换成异步请求后，timeout参数只接收一个整数
         try:
-            # 请求页面URL结构：
-            # 粉丝： https://me.csdn.net/fans/用户名称
-            # 关注：https: // me.csdn.net / follow / 用户名称
-            # 2.关注列表
-            # 加一个时间限制，免得爬虫卡住
-            # 元组(3,3)的第一个值，表示connect连接的超时时间，第二个值表示read读取的超时时间
-            html = requests.get(url='https://me.csdn.net/follow/'+user,timeout=(3,3)).text
-            sel = Selector(text=html)
-            # # 关注数
-            # following_number=re.search(r"\d+",sel.xpath("//div[@class='att']/a/span/text()").extract()[0]).group(0)
-            # 关注详情
-            following_ids = list(pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/@href").extract()).replace(
-                "https://me.csdn.net/", "", regex=True))
-            # # 用户名的去掉头尾的空格这一操作，可用SQL在数据库中实现，也可用python的pandas加上正则表达式实现
-            # following_name = pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/text()")
-            #                       .extract()).replace(r"\s", "", regex=True)
-            result=dict(zip(('user_id','FollowList'),
-                          (user,following_ids)))
-            return result
+            async with session.get(url='https://me.csdn.net/follow/' + user, timeout =4) as resp:
+                html = await resp.text()
+                sel = Selector(text=html)
+                # # 关注数
+                # following_number=re.search(r"\d+",sel.xpath("//div[@class='att']/a/span/text()").extract()[0]).group(0)
+                # 关注详情
+                following_ids = list(
+                    pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/@href").extract()).replace(
+                        "https://me.csdn.net/", "", regex=True))
+                # # 用户名的去掉头尾的空格这一操作，可用SQL在数据库中实现，也可用python的pandas加上正则表达式实现
+                # following_name = pd.Series(sel.xpath("//li[contains(@class,'clearfix')]/div/p/a/text()")
+                #                       .extract()).replace(r"\s", "", regex=True)
+                result = dict(zip(('user_id', 'FollowList'),
+                                  (user, following_ids)))
+                return result
         except:
             return dict(zip(('user_id', 'FollowList'),
-                                      (user, [])))
+                            (user, [])))
 
     # 从数据库中获取爬取用户列表（同一批的）
     # 数据库数据去重(存了之后去，还是存进去之后，在数据库里去重，还是提出来的时候去重)
@@ -362,7 +370,7 @@ class SocialSpider(object):
     # 或许可以专门建一张表，用来储存爬取ID，这张表是用户表去重后的结果
     def gain_user_list(self,table_name):
         # str.fromat()的替代用法：f'{variable}'
-        con=pymysql.connect(database='experiment_database',host='127.0.0.1',port=3306,user='root',password='password')
+        con=pymysql.connect(database='my_scrapy',host='127.0.0.1',port=3306,user='root',password='password')
         sql1=f'''select user_id,FansList,FollowList
                         from {table_name}
                         where duplicated='0' '''
@@ -373,7 +381,7 @@ class SocialSpider(object):
         return user_list
 
     def store_result_table(self,batch_count):
-        con = pymysql.connect(database='experiment_database', host='127.0.0.1', port=3306, user='root', password='password')
+        con = pymysql.connect(database='my_scrapy', host='127.0.0.1', port=3306, user='root', password='password')
         sql1 = f'''select * from temp_data where batchno={batch_count} '''
         # 查出的是DF
         df = pd.read_sql(sql1, con)
@@ -405,83 +413,19 @@ class SocialSpider(object):
     # 输入批次信息，然后对应着入库
     # 传入表名table_name，然后去该表中查用户来爬取
     # 加入异常处理机制，单次数据获取失败，爬虫仍然继续运行，免得程序老是中断
-    def main(self,batch_count,user_list,df):
-        print('任务开始：',datetime.datetime.now())
-        if batch_count<2:
-            return
 
-        for user_count in range(len(user_list)):
-            source=user_list.loc[user_count]
-            for user in source['FansList']:
-                print('开始获取单个用户的粉丝：', datetime.datetime.now())
-                try:
-                    fans_data=self.gain_fans(user)
-                except:
-                    fans_data=dict(zip(('user_id','FansList'),
-                      (user,[])))
-                print('获取结束：', datetime.datetime.now())
-                print('开始获取单个用户的关注对象：', datetime.datetime.now())
-                try:
-                    following_data = self.gain_following(user)
-                except:
-                    following_data=dict(zip(('user_id','FollowList'),
-                      (user,[])))
-                print('获取结束：', datetime.datetime.now())
-                df = df.append(dict(
-                            zip(['user_id','FansList','FollowList','AsFanOf','AsFollowOf','Duplicated','BatchNo'],
-                                   [fans_data['user_id'],fans_data['FansList'],following_data['FollowList'],
-                                    source['user_id'],'',0,batch_count])
-                            ),ignore_index=True)
-            for user in source['FollowList']:
-                print('开始获取单个用户的粉丝：', datetime.datetime.now())
-                try:
-                    fans_data =self.gain_fans(user)
-                except:
-                    fans_data = dict(zip(('user_id', 'FansList'),
-                                         (user, [])))
-                print('获取结束：', datetime.datetime.now())
-                print('开始获取单个用户的关注对象：', datetime.datetime.now())
-                try:
-                    following_data =self.gain_following(user)
-                except:
-                    following_data = dict(zip(('user_id', 'FollowList'),
-                                              (user, [])))
-                print('获取结束：', datetime.datetime.now())
-                df = df.append(dict(
-                        zip(['user_id', 'FansList', 'FollowList', 'AsFanOf', 'AsFollowOf', 'Duplicated', 'BatchNo'],
-                        [fans_data['user_id'], fans_data['FansList'], following_data['FollowList'],
-                         '',source['user_id'],0, batch_count])
-                        ), ignore_index=True)
-            # 每二十个人停一下
-            if (user_count%20==0)&(user_count>=20):
-                time.sleep(1)
-                print(user_count)
-                print(datetime.datetime.now())
-                # 插入表中
-                # 中间存储，这样更健壮，更稳定一些，不容易受破坏和影响
-                print('插入20条数据：', datetime.datetime.now())
-                self.mysql_temp_data(df)
-                print('插入结束：', datetime.datetime.now())
-                df = pd.DataFrame(
-                    columns=['user_id', 'FansList', 'FollowList', 'AsFanOf', 'AsFollowOf', 'Duplicated', 'BatchNo'])
-        print('获取所有爬取结果，并处理及插入：', datetime.datetime.now())
-        self.store_result_table(batch_count)
-        print('结束：', datetime.datetime.now())
-
-    async def get_target_info(self,batch_count,df,user,user_id,relation_flag='fan'):
+    async def get_target_info(self,sem,session,batch_count,df,user,user_id,relation_flag='fan'):
+        async with sem:
         # 异步操作事件序列中的主函数
-        loop = asyncio.get_event_loop()
-        future1 = loop.run_in_executor(None, self.gain_fans, user)
-        fans_data=await future1
-        future2 = loop.run_in_executor(None,  self.gain_following, user)
-        following_data=await future2
-        if relation_flag=='fan':
-            df.append([fans_data['user_id'], fans_data['FansList'], following_data['FollowList'],user_id, '',
-                   0, batch_count])
-        elif relation_flag=='following':
-            df.append([fans_data['user_id'], fans_data['FansList'], following_data['FollowList'], '',user_id,
-                   0, batch_count])
-        return 1
+            loop = asyncio.get_event_loop()
+            fans_data=await self.gain_fans(user,session)
+            following_data=await self.gain_following(user,session)
+            if relation_flag=='fan':
+                df.append([fans_data['user_id'], fans_data['FansList'], following_data['FollowList'],user_id, '',
+                       0, batch_count])
+            elif relation_flag=='following':
+                df.append([fans_data['user_id'], fans_data['FansList'], following_data['FollowList'], '',user_id,
+                       0, batch_count])
 
         # print('爬取子用户的粉丝', datetime.datetime.now())
         # fans_data =await self.gain_fans(user)
@@ -492,7 +436,7 @@ class SocialSpider(object):
         #            0, batch_count])
 
 
-    def corou_main(self,batch_count,user_list):
+    async def run_func(self,batch_count,user_list,pool):
         # 异步实现方式：在多个主函数之间，实现并行运行，主函数内部，设置，在执行特定函数时，切换到另一个主函数来去运行，
         # 等待特定函数执行完后，再返回执行原主函数剩下的内容
         # 在同一个循环里异步请求，创建多个变量，以避免变量共享导致的错误
@@ -503,49 +447,54 @@ class SocialSpider(object):
             return
         loop = asyncio.get_event_loop()
         df=[]
-        for user_count in range(0,len(user_list),12):
-            source_list=[]
-            if user_count+12>=len(user_list):
-                for i in range(user_count,len(user_list)):
-                    source_list.append(user_list.loc[i])
-            else:
-                for i in range(12):
-                    source_list.append(user_list.loc[user_count+i])
-            print(user_count,datetime.datetime.now())
-            # 由于CSDN限制了粉丝及关注列表显示长度为20，所以最多也就是开20个任务
-            # 粉丝加关注合起来是40个，所以最多也就是开40个协程，因此不用检验长度，直接按照变量长度开协程
-            # 所以现在是同一用户的粉丝列表与关注列表中的各个用户的相关信息，同步获取
-            tasks=[]
-            for source in source_list:
-                fan_len=len(source['FansList'])#粉丝列表
-                follow_len = len(source['FollowList'])#关注列表
-                if fan_len>0:
-                    tasks.extend([self.get_target_info(batch_count,df,source['FansList'][user_index],source['user_id'],'fan') for user_index in range(fan_len)])
-                    if follow_len>0:
-                        # list之间连接用extend
-                        # list本身在末尾添加元素用append
-                        tasks.extend([self.get_target_info(batch_count,df,source['FollowList'][user_index],source['user_id'],'following') for user_index in range(follow_len)])
-                elif follow_len>0:
-                    tasks.extend([self.get_target_info(batch_count, df, source['FollowList'][user_index], source['user_id'],'following') for user_index in range(follow_len)])
+        # 并发数限制
+        sem = asyncio.Semaphore(pool)
+        async with aiohttp.ClientSession() as session:
+            for user_count in range(0,len(user_list),200):
+                source_list=[]
+                if user_count+200>=len(user_list):
+                    for i in range(user_count,len(user_list)):
+                        source_list.append(user_list.loc[i])
+                else:
+                    for i in range(200):
+                        source_list.append(user_list.loc[user_count+i])
+                print(user_count,datetime.datetime.now())
+                # 由于CSDN限制了粉丝及关注列表显示长度为20，所以最多也就是开20个任务
+                # 粉丝加关注合起来是40个，所以最多也就是开40个协程，因此不用检验长度，直接按照变量长度开协程
+                # 所以现在是同一用户的粉丝列表与关注列表中的各个用户的相关信息，同步获取
+                tasks=[]
+                start = datetime.datetime.now()
+                for source in source_list:
+                    fan_len=len(source['FansList'])#粉丝列表
+                    follow_len = len(source['FollowList'])#关注列表
+                    if fan_len>0:
+                        tasks.extend([self.get_target_info(sem,session,batch_count,df,source['FansList'][user_index],source['user_id'],'fan') for user_index in range(fan_len)])
+                        if follow_len>0:
+                            # list之间连接用extend
+                            # list本身在末尾添加元素用append
+                            tasks.extend([self.get_target_info(sem,session,batch_count,df,source['FollowList'][user_index],source['user_id'],'following') for user_index in range(follow_len)])
+                    elif follow_len>0:
+                        tasks.extend([self.get_target_info(sem,session,batch_count, df, source['FollowList'][user_index], source['user_id'],'following') for user_index in range(follow_len)])
+                    else:
+                        continue
+                if len(tasks)!=0:
+                    await asyncio.wait(tasks)
                 else:
                     continue
-            if len(tasks)!=0:
-                futures = asyncio.wait(tasks)
-                loop.run_until_complete(futures)
-            else:
-                continue
-            print(user_count,'爬取完毕', datetime.datetime.now())
-            time.sleep(1)
-            print(datetime.datetime.now())
-            # 插入表中
-            # 中间存储，这样更健壮，更稳定一些，不容易受破坏和影响
-            print('插入12个用户的爬取结果：', datetime.datetime.now())
-            data = pd.DataFrame(df, columns=['user_id', 'FansList', 'FollowList', 'AsFanOf', 'AsFollowOf', 'Duplicated', 'BatchNo'])
-            self.mysql_temp_data(data)
-            print('插入结束：', datetime.datetime.now())
-            df = []
-        loop.close()
+                print(user_count,'爬取完毕', datetime.datetime.now()-start)
+                time.sleep(5)
+                # 插入表中
+                # 中间存储，这样更健壮，更稳定一些，不容易受破坏和影响
+                print('插入200个用户的爬取结果：', datetime.datetime.now())
+                data = pd.DataFrame(df, columns=['user_id', 'FansList', 'FollowList', 'AsFanOf', 'AsFollowOf', 'Duplicated', 'BatchNo'])
+                self.mysql_temp_data(data)
+                print('插入结束：', datetime.datetime.now())
+                df = []
 
+    def corou_main(self,batch_count,user_list,pool=500):
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self.run_func(batch_count,user_list,pool))
+        loop.close()
 
 class Neo4jStore(object):
     def __init__(self):
@@ -633,24 +582,34 @@ class Neo4jStore(object):
 
 
 if __name__ == "__main__":
-    db.create_tables([Batch2User,temp_data])
+    db.create_tables([Batch4User,temp_data])
 
     spider=SocialSpider(BKUrl,temp_data)
-    spider.set_table_name(Batch2User)
+    spider.set_table_name(Batch4User)
+
+
 
     # 开始爬取
     pool=mlp.Pool(processes=2)
-    user_list = spider.gain_user_list('Batch'+str(2-1)+'User')
+    user_list = spider.gain_user_list('Batch'+str(4-1)+'User')
     # 除法取整
     end=len(user_list)
     mid=end//2
     for i,j in zip([0,mid+1],[mid,end-1]):
         # 维持执行的进程总数为processes，当一个进程执行完毕后会添加新的进程进去
         user_data=user_list.loc[i:j].reset_index(drop=True)
-        pool.apply_async(spider.corou_main, args=(2,user_data))
+        pool.apply_async(spider.corou_main, args=(4,user_data,500))
     pool.close()
     #调用join之前，先调用close函数，否则会出错。执行完close后不会有新的进程加入到pool,join函数等待所有子进程结束
     pool.join()
+
+
+    # #
+    # loop = asyncio.get_event_loop()
+    # user_list = spider.gain_user_list('Batch' + str(4 - 1) + 'User')
+    # loop.run_until_complete(spider.run_func(4, user_list, 500))
+    # loop.close()
+
     print('获取所有爬取结果，并处理及插入：', datetime.datetime.now())
-    spider.store_result_table(2)
+    spider.store_result_table(4)
     print('结束：', datetime.datetime.now())
