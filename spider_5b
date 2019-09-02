@@ -104,6 +104,7 @@ class Batch3User(Model):
         database = db  # This model uses the "my_scrapy" database.
         table_name = 'Batch3User'
 
+
 class Batch4User(Model):
     user_id = CharField(max_length=60, index=True)
     FansList = TextField()
@@ -435,7 +436,6 @@ class SocialSpider(object):
         # df.append([fans_data['user_id'], fans_data['FansList'], following_data['FollowList'],user_id, '',
         #            0, batch_count])
 
-
     async def run_func(self,batch_count,user_list,pool):
         # 异步实现方式：在多个主函数之间，实现并行运行，主函数内部，设置，在执行特定函数时，切换到另一个主函数来去运行，
         # 等待特定函数执行完后，再返回执行原主函数剩下的内容
@@ -587,8 +587,6 @@ if __name__ == "__main__":
     spider=SocialSpider(BKUrl,temp_data)
     spider.set_table_name(Batch4User)
 
-
-
     # 开始爬取
     pool=mlp.Pool(processes=2)
     user_list = spider.gain_user_list('Batch'+str(4-1)+'User')
@@ -602,13 +600,6 @@ if __name__ == "__main__":
     pool.close()
     #调用join之前，先调用close函数，否则会出错。执行完close后不会有新的进程加入到pool,join函数等待所有子进程结束
     pool.join()
-
-
-    # #
-    # loop = asyncio.get_event_loop()
-    # user_list = spider.gain_user_list('Batch' + str(4 - 1) + 'User')
-    # loop.run_until_complete(spider.run_func(4, user_list, 500))
-    # loop.close()
 
     print('获取所有爬取结果，并处理及插入：', datetime.datetime.now())
     spider.store_result_table(4)
