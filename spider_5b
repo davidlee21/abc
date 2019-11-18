@@ -2,13 +2,12 @@
 # 计划:
 # 1.获取需爬取的所有URL,储存对应URL
 # 2.解析请求对应URL所获得的数据
-# 3,将解析内容存入MYSQL数据库
+# 3.将解析内容存入MYSQL数据库或Neo4j
 
 # 注意：预防异常机制的补充
 
 # 性能优化：
 # 通过打印执行时间发现，CPU计算并不花时间，主要的时间都花在网络请求上，也就是I/O上，请求时间基本是计算时间的10倍
-# 所以使用多线程或协程进行优化有意义，但是在哪启用多线程呢，怎么布置操作流程较好
 # 注意，多线程或协程共享同一内存地址的数据，这可以使得代码简化，但同时，也要注意同一变量被反复调用，导致数据错乱的问题
 
 # 第4b版在第三版的基础上加上多进程
@@ -39,16 +38,14 @@ import aiohttp
 db = MySQLDatabase('my_scrapy', host='127.0.0.1', port=3306, user='root', password='password')
 
 
-# 调用外部类的实例的方法
-# 一个表要定义一个类？
+# 一个表定义一个类
 # 存论坛子版块的表
 class BKUrl(Model):
     # 定义类属性
     # 定义局部实例
     # 注意：主键或索引的设置
-    # url用文本类型储存？
+    # url用文本类型储存
     burl = TextField()
-
     class Meta:
         database = db  # This model uses the "my_scrapy" database.
 
@@ -185,9 +182,6 @@ class SocialSpider(object):
     # 开始写场景下的逻辑：
 
     # 获取论坛子版块的URL
-    # 网页都是向url请求文件，然后运用文件在当前页面加载内容，区别只在于请求的文件是什么而已
-    # 三大请求方式：xhr（异步ajax）,js,css（本地渲染）
-    # 根据文件名，猜文件内容，来找目标内容对应文件（或可以批量请求URL来去找？自动化？）
     # js动态加载的，找对应的js文件的请求URL，从该url中获取对应js，然后取得js中的数据
     # 注意，子版块至少在二级，但也可能在三级、四级。。
     def get_url(self):
@@ -213,7 +207,6 @@ class SocialSpider(object):
         for node in tree:
             # 若存在子节点，则该节点是中间节点，遍历它的子节点
             if 'children' in node and node["children"]:
-                # 递归调用，注意栈的限制？
                 self.walkover(node["children"])
             else:
                 # 储存每一个子板块的URL：
@@ -249,8 +242,6 @@ class SocialSpider(object):
             html=driver.page_source
             # print(html)
             sel = Selector(text=html)
-            # extract出来的是List数据类型还是什么数据类型？确认一下
-            # 确认了，是List
             # 尽量不要在这里选用户，不方便对用户进行条件筛选
             author_list = sel.xpath(
                 "//div[@class='forums_table_c']/table/tbody//td[@class='forums_author']/a/@href").extract()[3:]
@@ -263,7 +254,6 @@ class SocialSpider(object):
                 # 避免重复
                 if author_id in store_record:
                     continue
-                # 内部实例化，无法调用对应方法？
                 # 使用实例化后，save()的方法，无法插入数据
                 # 但是另外的CREATE和INSERT方式，都可以插入
                 # self.__table.insert(user_id=author_id,user_url='https://me.csdn.net/'+author_id,
